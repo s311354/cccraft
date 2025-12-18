@@ -83,11 +83,16 @@ static void load(Type *ty) {
         return;
     }
 
+    // When we load a char or a short value to a register, we always
+    // extend them to the size of int, so we can assume the lower half of
+    // a register always contains a valid value. The upper half of a
+    // register for char, short and int may contain garbage. When we load
+    // a long value to a register, it simply occupies the entire register.
     // Load Memory -> Register 
     if (ty->size == 1)
-        println("  movsbq (%%rax), %%rax");
+        println("  movsbl (%%rax), %%eax");
     else if (ty->size == 2)
-        println("  movswq (%%rax), %%rax");
+        println("  movswl (%%rax), %%eax");
     else if (ty->size == 4)
         println("  movsxd (%%rax), %%rax");
     else
@@ -116,6 +121,13 @@ static void store(Type *ty) {
         println("  mov %%rax, (%%rdi)");
 }
 
+static void cmp_zero(Type *ty) {
+    if (is_integer(ty) && ty->size <= 4)
+        println("  cmp $0, %%eax");
+    else
+        println("  cmp $0, %%rax");
+}
+
 enum { I8, I16, I32, I64 };
 
 static int getTypeId(Type *ty) {
@@ -130,7 +142,7 @@ static int getTypeId(Type *ty) {
     return I64;
 }
 
-// The table for type casts
+// The table for type casts, Sign-extend
 static char i32i8[]  = "movsbl %al, %eax";
 static char i32i16[] = "movswl %ax, %eax";
 static char i32i64[] = "movsxd %eax, %rax";
@@ -150,13 +162,18 @@ static void cast(Type *from, Type *to) {
     if (to->kind == TY_VOID)
         return;
 
+    if (to->kind == TY_BOOL) {
+        cmp_zero(from);
+        println("  setne %%al");
+        println("  movzx %%al, %%eax");
+        return;
+    }
+
     int t1 = getTypeId(from);
     int t2 = getTypeId(to);
     if (cast_table[t1][t2])
         println("  %s", cast_table[t1][t2]);
 }
-
-
 
 static void gen_expr(Node *node) {
 
@@ -200,6 +217,46 @@ static void gen_expr(Node *node) {
             gen_expr(node->lhs);
             cast(node->lhs->ty, node->ty);
             return;
+        case ND_NOT:
+            gen_expr(node->lhs);
+            println("  cmp $0, %%rax");
+            println("  sete %%al");
+            println("  movzx %%al, %%rax");
+            return;
+        case ND_BITNOT:
+            gen_expr(node->lhs);
+            println("  not %%rax");
+            return;
+        case ND_LOGAND: {
+            int c = count();
+            gen_expr(node->lhs);
+            println("  cmp $0, %%rax");
+            println("  je .L.false.%d", c);
+            gen_expr(node->rhs);
+            println("  cmp $0, %%rax");
+            println("  je .L.false.%d", c);
+            println("  mov $1, %%rax");
+            println("  jmp .L.end.%d", c);
+            println(".L.false.%d:", c);
+            println("  mov $0, %%rax");
+            println(".L.end.%d:", c);
+            return;
+        }
+        case ND_LOGOR: {
+            int c = count();
+            gen_expr(node->lhs);
+            println("  cmp $0, %%rax");
+            println("  jne .L.true.%d", c);
+            gen_expr(node->rhs);
+            println("  cmp $0, %%rax");
+            println("  jne .L.true.%d", c);
+            println("  mov $0, %%rax");
+            println("  jmp .L.end.%d", c);
+            println(".L.true.%d:", c);
+            println("  mov $1, %%rax");
+            println(".L.end.%d:", c);
+            return;
+        }
         case ND_FUNCALL: {
             int nargs = 0;
             for (Node *arg = node->args; arg; arg = arg->next) {
@@ -243,11 +300,24 @@ static void gen_expr(Node *node) {
             println("  imul %s, %s", di, ax);
             return;
         case ND_DIV:
+        case ND_MOD:
             if (node->lhs->ty->size == 8)
                 println("  cqo");
             else
                 println("  cdq");
             println("  idiv %s", di);
+            
+            if (node->kind == ND_MOD)
+                println("  mov %%rdx, %%rax");
+            return;
+        case ND_BITAND:
+            println("  and %%rdi, %%rax");
+            return;
+        case ND_BITOR:
+            println("  or %%rdi, %%rax");
+            return;
+        case ND_BITXOR:
+            println("  xor %%rdi, %%rax");
             return;
         case ND_EQ:
         case ND_NE:
@@ -380,8 +450,12 @@ static void emit_text(Obj *prog) {
     for (Obj *fn = prog; fn; fn = fn->next) {
         if (!fn->is_function || !fn->is_definition)
             continue;
-     
-        println("  .globl %s", fn->name);             
+
+        if (fn->is_static)     
+            println("  .local %s", fn->name);
+        else
+            println("  .globl %s", fn->name);             
+
         println("  .text");
         println("%s:", fn->name);
         current_fn = fn;
