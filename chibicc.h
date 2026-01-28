@@ -10,6 +10,9 @@
 #include <string.h>
 #include <strings.h>
 
+#define MAX(x, y) ((x) < (y) ? (y) : (x))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
 typedef struct Type Type;
 typedef struct Node Node;
 typedef struct Member Member;
@@ -89,6 +92,7 @@ struct Obj {
 
 // AST node
 typedef enum {
+    ND_NULL_EXPR,  // Do nothing
     ND_ADD,        // +
     ND_SUB,        // -
     ND_MUL,        // *
@@ -98,11 +102,14 @@ typedef enum {
     ND_BITAND,     // &
     ND_BITOR,      // |
     ND_BITXOR,     // ^
+    ND_SHL,        // <<
+    ND_SHR,        // >>
     ND_EQ,         // ==
     ND_NE,         // !=
     ND_LT,         // <
     ND_LE,         // <= 
     ND_ASSIGN,     // =
+    ND_COND,       // ?:
     ND_COMMA,      // ,
     ND_MEMBER,     // . (struct member access)
     ND_ADDR,       // unary &
@@ -114,13 +121,18 @@ typedef enum {
     ND_RETURN,     // "return"
     ND_IF,         // "if"
     ND_FOR,        // "for" or "while"
+    ND_SWITCH,     // "switch"
+    ND_CASE,       // "case"
     ND_BLOCK,      // { ... }
+    ND_GOTO,       // "goto"
+    ND_LABEL,      // Labeled statement
     ND_FUNCALL,    // Function call
     ND_EXPR_STMT,  // Expression statement
     ND_STMT_EXPR,  // Statement expression
     ND_VAR,        // Variable
     ND_NUM,        // Integer
     ND_CAST,       // Type cast
+    ND_MEMZERO,    // Zero-clear a stack variable
 } NodeKind;
 
 // AST node type
@@ -137,6 +149,11 @@ struct Node {
     Node *els;
     Node *init;
     Node *inc;
+
+    // "break" and "continue" labels
+    char *brk_label;
+    char *cont_label;
+
     // Block or statement expression
     Node *body;
 
@@ -148,7 +165,18 @@ struct Node {
     Type *func_ty;
     Node *args;
 
+    // Goto or labeled statement
+    char *label;
+    char *unique_label;
+    Node *goto_next;
+
+    // Switch-cases
+    Node *case_next;
+    Node *default_case;
+
+    // Variable
     Obj  *var;      // Used if kind == ND_VAR   
+    // Numeric literal
     int64_t val;        // Used if kind == ND_NUM
 };
 
@@ -207,6 +235,7 @@ struct Type {
 struct Member {
     Member *next;
     Type *ty;
+    Token *tok; // for error message
     Token *name;
     int offset;
 };
@@ -225,6 +254,7 @@ Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
 Type *enum_type(void);
+Type *struct_type(void);
 void add_type(Node *node);
 
 //

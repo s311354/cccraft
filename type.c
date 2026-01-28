@@ -53,6 +53,10 @@ Type *enum_type(void) {
     return new_type(TY_ENUM, 4, 4);
 }
 
+Type *struct_type(void) {
+    return new_type(TY_STRUCT, 0, 1);
+}
+
 static Type *get_common_type(Type *ty1, Type *ty2) {
     if (ty1->base)
         return pointer_to(ty1->base);
@@ -140,10 +144,20 @@ void add_type(Node *node) {
         node->ty = ty_int;
         return;
     case ND_BITNOT:
+    case ND_SHL:
+    case ND_SHR:
         node->ty = node->lhs->ty;
         return;
     case ND_VAR:
         node->ty = node->var->ty;
+        return;
+    case ND_COND:
+        if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
+            node->ty = ty_void;
+        } else {
+            usual_arith_conv(&node->then, &node->els);
+            node->ty = node->then->ty;
+        }
         return;
     case ND_COMMA:
         node->ty = node->rhs->ty;
